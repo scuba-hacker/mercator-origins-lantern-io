@@ -44,17 +44,44 @@ Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 // setup() function -- runs once at startup --------------------------------
 
 int globalOffset;
-const int daytimeBrightness = 100;
+const int daytimeBrightness = 255;
 const int nighttimeBrightness = 50;
-const int rainbowBrightness = 20;
+const int rainbowBrightness = 255;
 
 int currentBrightness = 0;
+void flipDayNightBrightness();
+void randomWait();
+void chaseStart(int offset,
+          uint32_t color1, 
+          uint32_t color2, 
+          uint32_t color3, 
+          uint32_t color4, 
+          int wait);
+int incI(int i);
+int addI(int i,int add);
+void chaseEnd(int offset,
+          uint32_t color1, 
+          uint32_t color2, 
+          uint32_t color3, 
+          uint32_t color4, 
+          int wait);
+void chase(int offset,
+          uint32_t color1, 
+          uint32_t color2, 
+          uint32_t color3, 
+          uint32_t color4, 
+          int wait);
+void allOff();
+void colorWipe(uint32_t color, int wait);
+void theaterChase(uint32_t color, int wait);
+void rainbow(int wait);
+void theaterChaseRainbow(int wait);
 
 void setup() {
-  Serial1.begin(9600);
+  Serial.begin(9600);
 
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
-  strip.show();            // Turn OFF all pixels ASAP
+  strip.show();            // Turn OFF all pixels AS    AP
   
     // init brightness
   flipDayNightBrightness();
@@ -89,13 +116,13 @@ enum lemonPattern
   NO_FIX,
   FIX,
   LEAK
-}
+};
 
-void loop() 
+void loop_controlled() 
 {
-  while (Serial1.available()) 
+  while (Serial.available()) 
   {
-    byteFromLemon = Serial1.read();
+    byteFromLemon = Serial.read();
 //    if (initialColour == strip.Color(100,0,0))
 //      initialColour = strip.Color(0,0,100);
 //    else
@@ -114,7 +141,7 @@ void loop()
   strip.show();                          //  Update strip to match
 }
 
-void loop2()
+void loop()
 {
   // Fill along the length of the strip in various colors...
 //  colorWipe(strip.Color(255,   0,   0), 50); // Red
@@ -145,10 +172,18 @@ void loop2()
 //      strip.setPixelColor(0,strip.Color(random(0,40),random(0,40),random(0,40)));
 //      strip.show();                          //  Update strip to match
 //    }
+/*
     chase(globalOffset,
           strip.Color(0,0,100),
           strip.Color(0,0,25),
           strip.Color(0,0,10),
+          strip.Color(0,0,0),
+          ledWait);
+*/
+    chase(globalOffset,
+          strip.Color(0,0,255),
+          strip.Color(0,0,100),
+          strip.Color(0,0,25),
           strip.Color(0,0,0),
           ledWait);
   }
@@ -173,13 +208,30 @@ void loop2()
 
     rainbow(1);
 
+  for (int j=0; j<5;j++)
+  {
+    for (int i=rainbowBrightness;i>10;i-=2)
+    {
+      strip.setBrightness(i); // Set BRIGHTNESS to about 1/5 (max = 255)
+      strip.show();            // Turn OFF all pixels ASAP
+      delay(10);
+   }
+
+    for (int i=10;i<rainbowBrightness;i+=2)
+    {
+      strip.setBrightness(i); // Set BRIGHTNESS to about 1/5 (max = 255)
+      strip.show();            // Turn OFF all pixels ASAP
+      delay(10);
+   }
+  }
+  
     for (int i=rainbowBrightness;i>0;i-=2)
     {
       strip.setBrightness(i); // Set BRIGHTNESS to about 1/5 (max = 255)
       strip.show();            // Turn OFF all pixels ASAP
-      delay(50);
+      delay(10);
    }
- 
+
     allOff();
     
     strip.setBrightness(daytimeBrightness); // Set BRIGHTNESS to about 1/5 (max = 255)
@@ -201,13 +253,17 @@ void loop2()
   allOff();
   globalOffset++;
 */
-  // Do a theater marquee effect in various colors...
-//  theaterChase(strip.Color(127, 127, 127), 50); // White, half brightness
-//  theaterChase(strip.Color(127,   0,   0), 50); // Red, half brightness
-//  theaterChase(strip.Color(  0,   0, 127), 50); // Blue, half brightness
+}
 
-//  rainbow(10);             // Flowing rainbow cycle along the whole strip
-//  theaterChaseRainbow(50); // Rainbow-enhanced theaterChase variant
+void loop3()
+{
+  // Do a theater marquee effect in various colors...
+  theaterChase(strip.Color(127, 127, 127), 50); // White, half brightness
+  theaterChase(strip.Color(127,   0,   0), 50); // Red, half brightness
+  theaterChase(strip.Color(  0,   0, 127), 50); // Blue, half brightness
+
+  rainbow(10);             // Flowing rainbow cycle along the whole strip
+  theaterChaseRainbow(50); // Rainbow-enhanced theaterChase variant  
 }
 
 void randomWait()
