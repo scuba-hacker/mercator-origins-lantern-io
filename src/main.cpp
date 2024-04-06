@@ -17,7 +17,10 @@
 
 // https://devboards.info/boards/arduino-nano     (RX1)
 // https://docs.arduino.cc/tutorials/nano-every/run-4-uart/
-#define RX_FROM_LEMON_PIN 1
+
+#define REED1_GPIO 4
+
+#define REED2_GPIO 5
 
 // Which pin on the Arduino is connected to the NeoPixels?
 // On a Trinket or Gemma we suggest changing this to 1:
@@ -50,7 +53,6 @@ const int rainbowBrightness = 255;
 
 int currentBrightness = 0;
 void flipDayNightBrightness();
-void randomWait();
 void chaseStart(int offset,
           uint32_t color1, 
           uint32_t color2, 
@@ -78,33 +80,26 @@ void rainbow(int wait);
 void theaterChaseRainbow(int wait);
 
 void setup() {
-  Serial.begin(9600);
+  Serial1.begin(9600);  // on TX output there is a 1k and 2k voltage divider to reduce voltage from 5V to 3.3V for ESP32
+  // on RX input there is a SDP8600 single chip Optoschmitt IC (photo transistor) detecting the IR output of the ESP32
+
+  pinMode(REED1_GPIO, INPUT_PULLUP);
+  pinMode(REED2_GPIO, INPUT_PULLUP);
 
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
   strip.show();            // Turn OFF all pixels AS    AP
   
-    // init brightness
-  flipDayNightBrightness();
 
-//  strip.setBrightness(50); // Set BRIGHTNESS to about 1/5 (max = 255)
+  strip.fill(strip.Color(255,255,255),0,8);
+  strip.show();                          //  Update strip to match
+  delay(1000);
+  strip.fill(strip.Color(0,0,0),0,8);
+  strip.show();                          //  Update strip to match
+  
+  strip.setBrightness(daytimeBrightness)
 
   globalOffset=0;
 }
-
-// Would need an input switch to flip between day/night brightness.
-void flipDayNightBrightness()
-{
-  if (currentBrightness < daytimeBrightness)
-    currentBrightness = daytimeBrightness;
-  else
-    currentBrightness = nighttimeBrightness;
-  
-    strip.setBrightness(currentBrightness); // Set BRIGHTNESS to about 1/5 (max = 255)
-}
-
-// loop() function -- runs repeatedly as long as board is on ---------------
-
-uint32_t initialColour = strip.Color(100,0,0);
 
 uint8_t byteFromLemon = 0xFF;
 
@@ -118,157 +113,167 @@ enum lemonPattern
   LEAK
 };
 
-void loop_controlled() 
+uint8_t nextByteToSend = 0;
+
+enum e_lemon_status{LC_NONE=0, LC_STARTUP=1, LC_SEARCH_WIFI=2, LC_FOUND_WIFI=3, LC_NO_WIFI=4, LC_NO_GPS=5, LC_NO_FIX=6, LC_GOOD_FIX=7, LC_ALL_OFF=8, LC_NO_STATUS_UPDATE=127, LC_NO_INTERNET=128};
+
+
+uint32_t timeOfNextLemonByteExpectedReceived = 10000;   // initialise at 10 seconds from startup
+const uint32_t maximumWaitForLemonByteReceived = 60000; // if no comms from Lemon for 60 seconds then flash red to show no comms (LC_NONE)
+
+e_lemon_status lastLemonStatus = LC_STARTUP;
+
+e_lemon_status readLemonStatus()
 {
-  while (Serial.available()) 
+  e_lemon_status byteFromLemon = LC_NO_STATUS_UPDATE;
+
+  while (Serial1.available())
   {
-    byteFromLemon = Serial.read();
-//    if (initialColour == strip.Color(100,0,0))
-//      initialColour = strip.Color(0,0,100);
-//    else
- //     initialColour = strip.Color(100,0,0);
+    byteFromLemon = (e_lemon_status) (Serial1.read());
+    timeOfNextLemonByteExpectedReceived = millis() + maximumWaitForLemonByteReceived;
   }
 
-//  if (byteFromLemon == 0xFF)
-  //  byteFromLemon = random(0,7);
+  if (millis() > timeOfNextLemonByteExpectedReceived)
+  {
+    byteFromLemon = LC_NONE;
+  }
 
-  uint8_t pixelToToggle = byteFromLemon % 8;
-
-  strip.setPixelColor(pixelToToggle,initialColour);
-  strip.show();                          //  Update strip to match
-  delay(100);
-  strip.setPixelColor(pixelToToggle,strip.Color(0,0,0));
-  strip.show();                          //  Update strip to match
+  return byteFromLemon;
 }
+
+uint32_t nextStatusCheck = 1000;
+const uint32_t checkStatusDutyCycle = 500;
+
+uint8_t noStatePixelToToggle = 0;
 
 void loop()
 {
-  // Fill along the length of the strip in various colors...
-//  colorWipe(strip.Color(255,   0,   0), 50); // Red
-//  colorWipe(strip.Color(  0, 255,   0), 50); // Green
-//  colorWipe(strip.Color(  0,   0, 50), 50); // Blue
-//  colorWipe(strip.Color(  50,   0, 50), 50); // Blue
+  if (digitalRead(REED1_GPIO) == LOW)
+  {
+    Serial1.write(100);
+    delay(2000);
+  }
+
+  if (digitalRead(REED2_GPIO) == LOW)
+  {
+    Serial1.write(200);
+    delay(2000);
+  }
+    
+  if (millis() > nextStatusCheck)
+  {
+    nextStatusCheck += checkStatusDutyCycle;
+    e_lemon_status newStatus = readLemonStatus();
+    if (newStatus != LC_NO_STATUS_UPDATE && newStatus != lastLemonStatus)
+    {
+      lastLemonStatus = newStatus;
+    }
+  }
+
+  if (lastLemonStatus == LC_STARTUP && millis() > 3000)
+    lastLemonStatus = LC_NONE;
 
   int ledWait=100; // was 100
 
-
-  chaseStart(globalOffset,
-        strip.Color(0,0,100),
-        strip.Color(0,0,25),
-        strip.Color(0,0,6),
-        strip.Color(0,0,0),
-        ledWait);
-
-  int lightCentre=random(0,2);
-
-  lightCentre=0;
-
-//  int chaseCount=random(1,8);
-  int chaseCount=random(1,7);  // pick random number of spirals to light up before ending
-  while (chaseCount--)
+  switch(lastLemonStatus)
   {
-//    if (lightCentre)
-//    {
-//      strip.setPixelColor(0,strip.Color(random(0,40),random(0,40),random(0,40)));
-//      strip.show();                          //  Update strip to match
-//    }
-/*
-    chase(globalOffset,
-          strip.Color(0,0,100),
-          strip.Color(0,0,25),
-          strip.Color(0,0,10),
-          strip.Color(0,0,0),
-          ledWait);
-*/
-    chase(globalOffset,
-          strip.Color(0,0,255),
-          strip.Color(0,0,100),
-          strip.Color(0,0,25),
-          strip.Color(0,0,0),
-          ledWait);
+    case LC_NONE:
+    {
+      noStatePixelToToggle = (noStatePixelToToggle+1) % 8;
+      strip.fill(strip.Color(0,10,0),0,8);
+      strip.show();                          //  Update strip to match
+      delay(100);
+      strip.fill(strip.Color(0,0,0),0,8);
+      strip.show();                          //  Update strip to match
+      delay(100);
+      break;
+    }
+
+    case LC_STARTUP:
+    {
+      rainbow(1);
+      break;
+    }
+
+    case LC_SEARCH_WIFI:
+    {
+      chase(globalOffset,
+            strip.Color(0,0,255),   // BLUE
+            strip.Color(0,0,100),
+            strip.Color(0,0,50),
+            strip.Color(0,0,0),
+            ledWait);
+      break;
+    }
+    case LC_FOUND_WIFI:
+    {
+      chase(globalOffset,
+            strip.Color(255,50,255),   // CYAN
+            strip.Color(100,50,100),
+            strip.Color(50,50,50),
+            strip.Color(0,0,0),
+            ledWait);
+
+      break;
+    }
+    case LC_NO_WIFI:
+    {
+      chase(globalOffset,
+            strip.Color(0,255,255),   // MAGENTA
+            strip.Color(0,100,100),
+            strip.Color(0,50,50),
+            strip.Color(0,0,0),
+            ledWait);
+      break;
+    }
+    case LC_NO_GPS:
+    {
+      chase(globalOffset,
+            strip.Color(0,255,0),   // RED
+            strip.Color(0,100,0),
+            strip.Color(0,50,0),
+            strip.Color(0,0,0),
+            ledWait);
+      break;
+    }
+    case LC_NO_FIX:
+    {
+      chase(globalOffset,
+            strip.Color(255,255,0),   // YELLOW
+            strip.Color(100,100,0),
+            strip.Color(50,50,0),
+            strip.Color(0,0,0),
+            ledWait);
+      break;
+    }
+    case LC_GOOD_FIX:
+    {
+      chase(globalOffset,
+            strip.Color(255,0,0),   // GREEN
+            strip.Color(100,0,0),
+            strip.Color(50,0,0),
+            strip.Color(0,0,0),
+            ledWait);
+      break;
+    }
+    case LC_NO_INTERNET:
+    {
+      chase(globalOffset,
+            strip.Color(30,255,80),   // BLUE BACKGROUND WITH MAGENTA CHASE
+            strip.Color(30,100,80),
+            strip.Color(30,50,80),
+            strip.Color(30,0,80),
+            ledWait);
+      break;
+    }
+    case LC_ALL_OFF:
+    {
+      strip.fill(strip.Color(0,0,0),0,8);
+      strip.show();
+    }
+    default:
+      break;
   }
-  
-//  strip.setPixelColor(0,strip.Color(0,0,0));
-//  strip.show();                          //  Update strip to match
-        
-  chaseEnd(globalOffset,
-        strip.Color(0,0,100),
-        strip.Color(0,0,25),
-        strip.Color(0,0,6),
-        strip.Color(0,0,0),
-        ledWait);
-
-  globalOffset+=3;
-  
-  randomWait();
-  
-//  theaterChaseRainbow(25);
-
-    strip.setBrightness(rainbowBrightness); // Set BRIGHTNESS to about 1/5 (max = 255)
-
-    rainbow(1);
-
-  for (int j=0; j<5;j++)
-  {
-    for (int i=rainbowBrightness;i>10;i-=2)
-    {
-      strip.setBrightness(i); // Set BRIGHTNESS to about 1/5 (max = 255)
-      strip.show();            // Turn OFF all pixels ASAP
-      delay(10);
-   }
-
-    for (int i=10;i<rainbowBrightness;i+=2)
-    {
-      strip.setBrightness(i); // Set BRIGHTNESS to about 1/5 (max = 255)
-      strip.show();            // Turn OFF all pixels ASAP
-      delay(10);
-   }
-  }
-  
-    for (int i=rainbowBrightness;i>0;i-=2)
-    {
-      strip.setBrightness(i); // Set BRIGHTNESS to about 1/5 (max = 255)
-      strip.show();            // Turn OFF all pixels ASAP
-      delay(10);
-   }
-
-    allOff();
-    
-    strip.setBrightness(daytimeBrightness); // Set BRIGHTNESS to about 1/5 (max = 255)
-
-    randomWait();
-
-
-/*        
-  // with red second from last for debugging
-  chase(globalOffset,
-        strip.Color(0,0,100),
-        strip.Color(0,0,25),
-        strip.Color(6,0,0),
-        strip.Color(0,0,0),
-        ledWait);
-
-  randomWait();
-
-  allOff();
-  globalOffset++;
-*/
-}
-
-void loop3()
-{
-  // Do a theater marquee effect in various colors...
-  theaterChase(strip.Color(127, 127, 127), 50); // White, half brightness
-  theaterChase(strip.Color(127,   0,   0), 50); // Red, half brightness
-  theaterChase(strip.Color(  0,   0, 127), 50); // Blue, half brightness
-
-  rainbow(10);             // Flowing rainbow cycle along the whole strip
-  theaterChaseRainbow(50); // Rainbow-enhanced theaterChase variant  
-}
-
-void randomWait()
-{
-  delay(random(5,20)*100); // between 500 ms and 2000ms
 }
 
 void chaseStart(int offset,
