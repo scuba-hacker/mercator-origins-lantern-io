@@ -19,8 +19,9 @@
 // https://docs.arduino.cc/tutorials/nano-every/run-4-uart/
 
 #define REED1_GPIO 4
-
 #define REED2_GPIO 5
+
+#define CIRCUIT_BREAKER_GPIO 15
 
 // Which pin on the Arduino is connected to the NeoPixels?
 // On a Trinket or Gemma we suggest changing this to 1:
@@ -85,10 +86,11 @@ void setup() {
 
   pinMode(REED1_GPIO, INPUT_PULLUP);
   pinMode(REED2_GPIO, INPUT_PULLUP);
+  pinMode(CIRCUIT_BREAKER_GPIO, OUTPUT);
+  digitalWrite(CIRCUIT_BREAKER_GPIO,LOW);
 
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
   strip.show();            // Turn OFF all pixels AS    AP
-  
 
   strip.fill(strip.Color(255,255,255),0,8);
   strip.show();                          //  Update strip to match
@@ -96,7 +98,7 @@ void setup() {
   strip.fill(strip.Color(0,0,0),0,8);
   strip.show();                          //  Update strip to match
   
-  strip.setBrightness(daytimeBrightness)
+  strip.setBrightness(daytimeBrightness);
 
   globalOffset=0;
 }
@@ -123,6 +125,12 @@ const uint32_t maximumWaitForLemonByteReceived = 60000; // if no comms from Lemo
 
 e_lemon_status lastLemonStatus = LC_STARTUP;
 
+e_lemon_status flushLemonStatus()
+{
+  while (Serial1.available())
+    Serial1.read();
+}
+
 e_lemon_status readLemonStatus()
 {
   e_lemon_status byteFromLemon = LC_NO_STATUS_UPDATE;
@@ -146,20 +154,53 @@ const uint32_t checkStatusDutyCycle = 500;
 
 uint8_t noStatePixelToToggle = 0;
 
+bool circuitBreakerTripped = false;
+
+void(* resetArduino) (void) = 0; //declare reset function @ address 0
+
 void loop()
 {
-  if (digitalRead(REED1_GPIO) == LOW)
+  if (digitalRead(REED1_GPIO) == LOW)     // Restart / Reboot system
   {
     Serial1.write(100);
-    delay(2000);
+    strip.fill(strip.Color(0,10,0),0,8);
+    strip.show();                          //  Update strip to match
+    digitalWrite(CIRCUIT_BREAKER_GPIO,HIGH);
+    circuitBreakerTripped = true;
+    delay(5000);
+    digitalWrite(CIRCUIT_BREAKER_GPIO,LOW);
+    circuitBreakerTripped = false;
+    strip.fill(strip.Color(0,0,0),0,8);
+    strip.show();                          //  Update strip to match
+    resetArduino();
   }
-
-  if (digitalRead(REED2_GPIO) == LOW)
+  else if (digitalRead(REED2_GPIO) == LOW)      // Toggle system power on/off
   {
-    Serial1.write(200);
-    delay(2000);
-  }
+    if (circuitBreakerTripped)
+    {
+      // All green LEDs, disable the circuit breaker - turns on the rest of the system.
+      Serial1.write(200);
+      strip.fill(strip.Color(255,0,0),0,8);
+      strip.show();
+      digitalWrite(CIRCUIT_BREAKER_GPIO,LOW);
+      delay(3000);
+      resetArduino();
+    }
+    else
+    {
+      // All red LEDs, enable the circuit breaker - turns off the rest of the system.
+      Serial1.write(200);
+      strip.fill(strip.Color(0,255,0),0,8);
+      strip.show();
+      digitalWrite(CIRCUIT_BREAKER_GPIO,HIGH);
+      delay(3000);
+      lastLemonStatus = LC_NONE;
+      flushLemonStatus();
+    }
     
+    circuitBreakerTripped = !circuitBreakerTripped;
+  }
+  
   if (millis() > nextStatusCheck)
   {
     nextStatusCheck += checkStatusDutyCycle;
@@ -170,7 +211,7 @@ void loop()
     }
   }
 
-  if (lastLemonStatus == LC_STARTUP && millis() > 3000)
+  if (lastLemonStatus == LC_STARTUP && millis() > 7000)
     lastLemonStatus = LC_NONE;
 
   int ledWait=100; // was 100
@@ -180,12 +221,23 @@ void loop()
     case LC_NONE:
     {
       noStatePixelToToggle = (noStatePixelToToggle+1) % 8;
-      strip.fill(strip.Color(0,10,0),0,8);
-      strip.show();                          //  Update strip to match
-      delay(100);
-      strip.fill(strip.Color(0,0,0),0,8);
-      strip.show();                          //  Update strip to match
-      delay(100);
+      if (circuitBreakerTripped)    // Rotating single low brightness LED
+      {
+        strip.setPixelColor(noStatePixelToToggle, strip.Color(0,10,0));
+        strip.show();                          //  Update strip to match
+        delay(100);
+        strip.setPixelColor(noStatePixelToToggle, strip.Color(0,0,0));
+        strip.show();                          //  Update strip to match
+      }
+      else                           // All pixels low brightness LED flash
+      {
+        strip.fill(strip.Color(0,10,0),0,8);
+        strip.show();                          //  Update strip to match
+        delay(100);
+        strip.fill(strip.Color(0,0,0),0,8);
+        strip.show();                          //  Update strip to match
+        delay(100);
+      }
       break;
     }
 
