@@ -117,8 +117,8 @@ enum lemonPattern
 
 uint8_t nextByteToSend = 0;
 
-enum e_lemon_status{LC_NONE=0, LC_STARTUP=1, LC_SEARCH_WIFI=2, LC_FOUND_WIFI=3, LC_NO_WIFI=4, LC_NO_GPS=5, LC_NO_FIX=6, LC_GOOD_FIX=7, LC_ALL_OFF=8, LC_NO_STATUS_UPDATE=127, LC_NO_INTERNET=128};
-
+enum e_lemon_status{LC_NONE=0, LC_STARTUP=1, LC_SEARCH_WIFI=2, LC_FOUND_WIFI=3, LC_NO_WIFI=4, LC_NO_GPS=5, 
+                    LC_NO_FIX=6, LC_GOOD_FIX=7, LC_ALL_OFF=8, LC_DIVE_IN_PROGRESS=64, LC_NO_STATUS_UPDATE=127, LC_NO_INTERNET=128};
 
 uint32_t timeOfNextLemonByteExpectedReceived = 10000;   // initialise at 10 seconds from startup
 const uint32_t maximumWaitForLemonByteReceived = 60000; // if no comms from Lemon for 60 seconds then flash red to show no comms (LC_NONE)
@@ -152,11 +152,23 @@ e_lemon_status readLemonStatus()
 uint32_t nextStatusCheck = 1000;
 const uint32_t checkStatusDutyCycle = 500;
 
-uint8_t noStatePixelToToggle = 0;
+uint8_t singlePixelToToggle = 0;
 
 bool circuitBreakerTripped = false;
 
 void(* resetArduino) (void) = 0; //declare reset function @ address 0
+
+void flashAndPauseNextPixel(uint32_t colour, uint32_t wait)
+{
+  singlePixelToToggle = (singlePixelToToggle+1) % 8;
+  // Rotating single low brightness
+  strip.setPixelColor(singlePixelToToggle, colour);
+  strip.show();                          //  Update strip to match
+  delay(100);
+  strip.setPixelColor(singlePixelToToggle, strip.Color(0,0,0));
+  strip.show();                          //  Update strip to match
+  delay(wait);
+}
 
 void loop()
 {
@@ -214,20 +226,18 @@ void loop()
   if (lastLemonStatus == LC_STARTUP && millis() > 7000)
     lastLemonStatus = LC_NONE;
 
-  int ledWait=100; // was 100
+  int ledWait=100;
 
+  // LC_DIVE_IN_PROGRESS flag reduces LED usage to save power
   switch(lastLemonStatus)
   {
     case LC_NONE:
+    case LC_NONE | LC_DIVE_IN_PROGRESS:
     {
-      noStatePixelToToggle = (noStatePixelToToggle+1) % 8;
+      singlePixelToToggle = (singlePixelToToggle+1) % 8;
       if (circuitBreakerTripped)    // Rotating single low brightness LED
       {
-        strip.setPixelColor(noStatePixelToToggle, strip.Color(0,10,0));
-        strip.show();                          //  Update strip to match
-        delay(100);
-        strip.setPixelColor(noStatePixelToToggle, strip.Color(0,0,0));
-        strip.show();                          //  Update strip to match
+        flashAndPauseNextPixel(strip.Color(0,10,0), 0);
       }
       else                           // All pixels low brightness LED flash
       {
@@ -242,12 +252,13 @@ void loop()
     }
 
     case LC_STARTUP:
+    case LC_STARTUP | LC_DIVE_IN_PROGRESS:
     {
       rainbow(1);
       break;
     }
-
     case LC_SEARCH_WIFI:
+    case LC_SEARCH_WIFI | LC_DIVE_IN_PROGRESS:
     {
       chase(globalOffset,
             strip.Color(0,0,255),   // BLUE
@@ -258,6 +269,7 @@ void loop()
       break;
     }
     case LC_FOUND_WIFI:
+    case LC_FOUND_WIFI | LC_DIVE_IN_PROGRESS:
     {
       chase(globalOffset,
             strip.Color(255,50,255),   // CYAN
@@ -265,7 +277,6 @@ void loop()
             strip.Color(50,50,50),
             strip.Color(0,0,0),
             ledWait);
-
       break;
     }
     case LC_NO_WIFI:
@@ -278,6 +289,12 @@ void loop()
             ledWait);
       break;
     }
+    case LC_NO_WIFI | LC_DIVE_IN_PROGRESS:
+    {
+      // Rotating single low brightness LED Magenta
+      flashAndPauseNextPixel(strip.Color(0,10,10), 200);
+      break;
+    }
     case LC_NO_GPS:
     {
       chase(globalOffset,
@@ -286,6 +303,12 @@ void loop()
             strip.Color(0,50,0),
             strip.Color(0,0,0),
             ledWait);
+      break;
+    }
+    case LC_NO_GPS | LC_DIVE_IN_PROGRESS:
+    {
+      // Rotating single low brightness LED Red
+      flashAndPauseNextPixel(strip.Color(0,10,0), 200);
       break;
     }
     case LC_NO_FIX:
@@ -298,6 +321,12 @@ void loop()
             ledWait);
       break;
     }
+    case LC_NO_FIX | LC_DIVE_IN_PROGRESS:
+    {
+      // Rotating single low brightness LED Yellow
+      flashAndPauseNextPixel(strip.Color(10,10,0), 200);
+      break;
+    }
     case LC_GOOD_FIX:
     {
       chase(globalOffset,
@@ -306,6 +335,12 @@ void loop()
             strip.Color(50,0,0),
             strip.Color(0,0,0),
             ledWait);
+      break;
+    }
+    case LC_GOOD_FIX | LC_DIVE_IN_PROGRESS:
+    {
+      // Rotating single low brightness LED Green
+      flashAndPauseNextPixel(strip.Color(10,0,0), 200);
       break;
     }
     case LC_NO_INTERNET:
@@ -318,10 +353,18 @@ void loop()
             ledWait);
       break;
     }
+    case LC_NO_INTERNET | LC_DIVE_IN_PROGRESS:
+    {
+      // Rotating single low brightness LED Cyan
+      flashAndPauseNextPixel(strip.Color(0,10,10), 200);
+      break;
+    }
     case LC_ALL_OFF:
+    case LC_ALL_OFF | LC_DIVE_IN_PROGRESS:
     {
       strip.fill(strip.Color(0,0,0),0,8);
       strip.show();
+      break;
     }
     default:
       break;
