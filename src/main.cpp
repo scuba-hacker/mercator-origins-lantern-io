@@ -1,5 +1,3 @@
-// A basic everyday NeoPixel strip test program.
-
 // NEOPIXEL BEST PRACTICES for most reliable operation:
 // - Add 1000 uF CAPACITOR between NeoPixel strip's + and - connections.
 // - MINIMIZE WIRING LENGTH between microcontroller board and first pixel.
@@ -18,20 +16,20 @@
 // https://devboards.info/boards/arduino-nano     (RX1)
 // https://docs.arduino.cc/tutorials/nano-every/run-4-uart/
 
-#define REED1_GPIO 4
-#define REED2_GPIO 5
+#define REED1_CLOSURE_EDGE_REBOOT_GPIO 4       // Connects to ground on close
+#define REED2_SWITCH_SIDE_EDGE_POWER_OFF_ON_GPIO 5   // Connects to ground on close
 
-#define CIRCUIT_BREAKER_GPIO 15
+#define CIRCUIT_BREAKER_GPIO 15   // energises relay coil via NPN MOSFET
 
-// Which pin on the Arduino is connected to the NeoPixels?
-// On a Trinket or Gemma we suggest changing this to 1:
-#define LED_PIN    6 // pin D6
+// HardwareSerial Serial1 TX_GPIO is on GPIO D0. Used to send a byte to Mako to say restarting.
+// HardwareSerial Serial1 RX_GPIO is on GPIO D1. Used to receive status for LEDs from Mako.
+
+#define LED_PIN    6 // GPIO D6 for neopixel ring
 // Red Positive LED wire is connected to +5V
 // Black Negative LED wire is connected to GND
 // White Signal LED wire is connected to pin D6
 
-// How many NeoPixels are attached to the Arduino?
-#define LED_COUNT 8
+#define LED_COUNT 8   // number of neopixels in ring
 
 // Declare our NeoPixel strip object:
 Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -47,10 +45,10 @@ Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // setup() function -- runs once at startup --------------------------------
 
-int globalOffset;
+int globalOffset = 0;
 const int daytimeBrightness = 255;
 const int nighttimeBrightness = 50;
-const int rainbowBrightness = 255;
+const int rainbowBrightness = 30;       // 65mA for 30, set at 255 current is   210mA
 
 int currentBrightness = 0;
 void flipDayNightBrightness();
@@ -84,19 +82,13 @@ void setup() {
   Serial1.begin(9600);  // on TX output there is a 1k and 2k voltage divider to reduce voltage from 5V to 3.3V for ESP32
   // on RX input there is a SDP8600 single chip Optoschmitt IC (photo transistor) detecting the IR output of the ESP32
 
-  pinMode(REED1_GPIO, INPUT_PULLUP);
-  pinMode(REED2_GPIO, INPUT_PULLUP);
+  pinMode(REED1_CLOSURE_EDGE_REBOOT_GPIO, INPUT_PULLUP);
+  pinMode(REED2_SWITCH_SIDE_EDGE_POWER_OFF_ON_GPIO, INPUT_PULLUP);
   pinMode(CIRCUIT_BREAKER_GPIO, OUTPUT);
   digitalWrite(CIRCUIT_BREAKER_GPIO,LOW);
 
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
   strip.show();            // Turn OFF all pixels AS    AP
-
-  strip.fill(strip.Color(255,255,255),0,8);
-  strip.show();                          //  Update strip to match
-  delay(1000);
-  strip.fill(strip.Color(0,0,0),0,8);
-  strip.show();                          //  Update strip to match
   
   strip.setBrightness(daytimeBrightness);
 
@@ -172,9 +164,9 @@ void flashAndPauseNextPixel(uint32_t colour, uint32_t wait)
 
 void loop()
 {
-  if (digitalRead(REED1_GPIO) == LOW)     // Restart / Reboot system
+  if (digitalRead(REED1_CLOSURE_EDGE_REBOOT_GPIO) == LOW)     // Restart / Reboot system
   {
-    Serial1.write(100);
+    Serial1.write(100);   // send byte 100 to Lemon to indicate reboot initiated 
     strip.fill(strip.Color(0,10,0),0,8);
     strip.show();                          //  Update strip to match
     digitalWrite(CIRCUIT_BREAKER_GPIO,HIGH);
@@ -186,26 +178,30 @@ void loop()
     strip.show();                          //  Update strip to match
     resetArduino();
   }
-  else if (digitalRead(REED2_GPIO) == LOW)      // Toggle system power on/off
+  else if (digitalRead(REED2_SWITCH_SIDE_EDGE_POWER_OFF_ON_GPIO) == LOW)      // Toggle system power on/off
   {
     if (circuitBreakerTripped)
     {
       // All green LEDs, disable the circuit breaker - turns on the rest of the system.
-      Serial1.write(200);
+      Serial1.write(200);   // send byte 200 to Lemon to indicate power-up initiated 
+      strip.fill(strip.Color(0,10,0),0,8);
       strip.fill(strip.Color(255,0,0),0,8);
       strip.show();
       digitalWrite(CIRCUIT_BREAKER_GPIO,LOW);
       delay(3000);
+      strip.fill(strip.Color(0,0,0),0,8);
+      strip.show();                          //  Update strip to match
       resetArduino();
     }
     else
     {
       // All red LEDs, enable the circuit breaker - turns off the rest of the system.
-      Serial1.write(200);
+      Serial1.write(200);  // send byte 200 to Lemon to indicate power-down initiated 
       strip.fill(strip.Color(0,255,0),0,8);
       strip.show();
       digitalWrite(CIRCUIT_BREAKER_GPIO,HIGH);
       delay(3000);
+      strip.fill(strip.Color(0,0,0),0,8);
       lastLemonStatus = LC_NONE;
       flushLemonStatus();
     }
@@ -234,13 +230,13 @@ void loop()
     case LC_NONE:
     case LC_NONE | LC_DIVE_IN_PROGRESS:
     {
-      singlePixelToToggle = (singlePixelToToggle+1) % 8;
-      if (circuitBreakerTripped)    // Rotating single low brightness LED
+      if (circuitBreakerTripped || lastLemonStatus & LC_DIVE_IN_PROGRESS)    // Rotating single low brightness LED
       {
-        flashAndPauseNextPixel(strip.Color(0,10,0), 0);
+        flashAndPauseNextPixel(strip.Color(0,10,0), 200);
       }
       else                           // All pixels low brightness LED flash
       {
+        // flash entire ring red/off/red/off
         strip.fill(strip.Color(0,10,0),0,8);
         strip.show();                          //  Update strip to match
         delay(100);
@@ -254,7 +250,9 @@ void loop()
     case LC_STARTUP:
     case LC_STARTUP | LC_DIVE_IN_PROGRESS:
     {
+      strip.setBrightness(rainbowBrightness);
       rainbow(1);
+      strip.setBrightness(daytimeBrightness);
       break;
     }
     case LC_SEARCH_WIFI:
