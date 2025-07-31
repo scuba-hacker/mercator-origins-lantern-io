@@ -78,9 +78,78 @@ void theaterChase(uint32_t color, int wait);
 void rainbow(int wait);
 void theaterChaseRainbow(int wait);
 
+
+void testTightSerialTxLoop()
+{
+  // must be called at top of loop() and not in setup()
+  // do a return straight after calling the function
+  // must have flush() call, see above
+  // also found need the 1 uS to ensure reliable reception by ESP32-S3 when sending bytes one by one
+  Serial1.write(85);  // test byte 0x55  0b01010101 == 85   (was using 123 before - esp32-s3 not always locking onto it)
+  Serial1.flush();
+  delayMicroseconds(1);
+}
+
 void setup() {
   Serial1.begin(9600);  // on TX output there is a 1k and 2k voltage divider to reduce voltage from 5V to 3.3V for ESP32
-  // on RX input there is a SDP8600 single chip Optoschmitt IC (photo transistor) detecting the IR output of the ESP32
+
+  while (!Serial1); // needed on Arduino Nano Every 
+
+/*
+
+🔍 while (!Serial); — Why is it important?
+
+On some Arduino boards (especially newer ones like the Nano Every, Leonardo, or any board with native USB), 
+the Serial object represents a USB virtual serial port, not a traditional UART. Unlike the classic Uno, 
+the USB connection needs to be enumerated by the host PC before Serial is ready to use.
+
+
+✅ Why it matters on the Nano Every
+The Nano Every uses a USB-to-serial bridge, so Serial depends on USB enumeration and initialization.
+If you try to call Serial.print(), Serial.write(), or access USART0 before the serial port is fully active, the output may be:
+Lost (never sent),
+Garbage, or
+Cause undefined behavior if you're also tweaking USART registers like USART0.CTRLC.
+
+⏱ What does while (!Serial); do?
+It waits until the serial port is ready, which usually means:
+The host PC has enumerated the USB connection.
+The virtual serial port is open.
+The Arduino can now safely send and receive data.
+*/
+
+
+/* WHY FLUSH NEEDED ON ARDUINO NANO EVERY
+
+When you do something like:
+Serial.write(123);
+Serial.write(123);
+Serial.write(123);
+...those function calls queue bytes rapidly into the transmit buffer, one after the other. Because the UART hardware has a transmit buffer, the second and third write() don’t wait for the previous byte’s frame to fully complete.
+So:
+Stop bits are defined in the frame, but...
+If another byte is queued before the stop bit is fully transmitted, the UART hardware may:
+Cut the stop bit short, or
+Transition directly into the start bit of the next byte.
+This results in no idle line (high voltage) between frames — especially bad when you use 2 stop bits and expect more spacing.
+
+🔧 Summary:
+Condition	What happens
+Serial.write() back-to-back	Bytes are queued with no guaranteed spacing
+UART TX buffer not empty	Next byte begins immediately after previous
+Stop bit length may be shortened	Especially if UART prioritizes throughput
+RX on ESP32 may misalign	Reads wrong bits — e.g., 123 becomes 175 or 237
+No delay or flush()	No idle high time, so start bit isn't clear
+
+How to force full stop bit transmission
+Add Serial.flush(); after write()
+This waits until the TX buffer is empty and transmission is complete, including the stop bit.
+Add a small delay:
+Serial.write(123);
+delayMicroseconds(200); // ensures line stays idle
+Or batch your data in one call (e.g., buffer then send all at once)
+
+*/
 
   pinMode(REED1_CLOSURE_EDGE_REBOOT_GPIO, INPUT_PULLUP);
   pinMode(REED2_SWITCH_SIDE_EDGE_POWER_OFF_ON_GPIO, INPUT_PULLUP);
@@ -163,10 +232,11 @@ void flashAndPauseNextPixel(uint32_t colour, uint32_t wait)
 }
 
 void loop()
-{
+{   
   if (digitalRead(REED1_CLOSURE_EDGE_REBOOT_GPIO) == LOW)     // Restart / Reboot system
   {
     Serial1.write(100);   // send byte 100 to Lemon to indicate reboot initiated 
+    Serial1.flush();
     strip.fill(strip.Color(0,10,0),0,8);
     strip.show();                          //  Update strip to match
     digitalWrite(CIRCUIT_BREAKER_GPIO,HIGH);
@@ -184,6 +254,7 @@ void loop()
     {
       // All green LEDs, disable the circuit breaker - turns on the rest of the system.
       Serial1.write(200);   // send byte 200 to Lemon to indicate power-up initiated 
+      Serial1.flush();
       strip.fill(strip.Color(0,10,0),0,8);
       strip.fill(strip.Color(255,0,0),0,8);
       strip.show();
@@ -197,6 +268,7 @@ void loop()
     {
       // All red LEDs, enable the circuit breaker - turns off the rest of the system.
       Serial1.write(200);  // send byte 200 to Lemon to indicate power-down initiated 
+      Serial1.flush();
       strip.fill(strip.Color(0,255,0),0,8);
       strip.show();
       digitalWrite(CIRCUIT_BREAKER_GPIO,HIGH);
