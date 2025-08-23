@@ -41,8 +41,11 @@ void readTempHumidityCJMCU_1080_Sensor(double* temperature, double* humidity);
 #define REED2_SWITCH_SIDE_EDGE_POWER_OFF_ON_GPIO 5   // Connects to ground on close
 #define ARDUINO_BOARD_LED 13
 #define CIRCUIT_BREAKER_GPIO 15   // energises relay coil via NPN MOSFET
-#define CURRENT_SENSOR_ANALOG_IN_GPIO  
-#define VCC_HALVED_ANALOG_IN_GPIO 
+#define CURRENT_SENSOR_ANALOG_IN_GPIO  XX
+#define VCC_HALVED_ANALOG_IN_GPIO      YY
+#define LEAK_SENSOR_GPIO               LL   // leak at bottom of float
+#define IGNORE_FLOAT_LEAK_GPIO         SS   // on-off switch, suppress leak alerts from float - 
+                              // once blue leak sensors get wet they will probably stay that way
 
 // HardwareSerial Serial1 TX_GPIO is on GPIO D0. Used to send a byte to Mako to say restarting.
 // HardwareSerial Serial1 RX_GPIO is on GPIO D1. Used to receive status for LEDs from Mako.
