@@ -9,30 +9,53 @@
 // (Skipping these may work OK on your workbench but can fail in the field)
 
 #include <Adafruit_NeoPixel.h>
-#ifdef __AVR__
- #include <avr/power.h> // Required for 16 MHz Adafruit Trinket
-#endif
+#include <Wire.h>
+
+// This is not needed for Arduino Nano Every.
+// Although AVR is defined, it 
+// The Arduino Nano Every is not AVR in the “classic” sense.
+// Classic Arduinos (Uno, Nano, Pro Mini, etc.) use ATmega328P with the avr-libc toolchain.
+// The Nano Every uses an ATmega4809 (megaAVR-0 family).
+// While it’s technically still an AVR-family MCU, the megaAVR-0 chips don’t use the same avr/power.h functions that old sketches needed (e.g. clock_prescale_set).
+// The Every runs at its configured clock (16 MHz) right out of the box — no prescaler hacks needed.
+
+//#ifdef __AVR__
+// #include <avr/power.h> // Required for 16 MHz Adafruit Trinket
+//#endif
+
+void initializeI2C();
+
+// https://kunkune.co.uk/shop/arduino-sensors/cjmcu-1080-high-precision-temperature-and-humidity-sensor-hdc1080/
+// https://www.ti.com/lit/ds/symlink/hdc1080.pdf
+// Uses TI HDC1080 IC
+// I2C Address: 0x40
+void readTempHumidityCJMCU_1080_Sensor(double* temperature, double* humidity);
+
+// Current sensor GY-471 MAX471
+// https://www.analog.com/en/products/max471.html
 
 // https://devboards.info/boards/arduino-nano     (RX1)
 // https://docs.arduino.cc/tutorials/nano-every/run-4-uart/
 
 #define REED1_CLOSURE_EDGE_REBOOT_GPIO 4       // Connects to ground on close
 #define REED2_SWITCH_SIDE_EDGE_POWER_OFF_ON_GPIO 5   // Connects to ground on close
-
+#define ARDUINO_BOARD_LED 13
 #define CIRCUIT_BREAKER_GPIO 15   // energises relay coil via NPN MOSFET
+#define CURRENT_SENSOR_ANALOG_IN_GPIO  
+#define VCC_HALVED_ANALOG_IN_GPIO 
 
 // HardwareSerial Serial1 TX_GPIO is on GPIO D0. Used to send a byte to Mako to say restarting.
 // HardwareSerial Serial1 RX_GPIO is on GPIO D1. Used to receive status for LEDs from Mako.
 
-#define LED_PIN    6 // GPIO D6 for neopixel ring
+#define NEOPIXEL_GPIO    6 // GPIO D6 for neopixel ring
 // Red Positive LED wire is connected to +5V
 // Black Negative LED wire is connected to GND
 // White Signal LED wire is connected to pin D6
 
-#define LED_COUNT 8   // number of neopixels in ring
+#define NEOPIXEL_LED_COUNT 8   // number of neopixels in ring
 
 // Declare our NeoPixel strip object:
-Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel strip(NEOPIXEL_LED_COUNT, NEOPIXEL_GPIO, NEO_GRB + NEO_KHZ800);
 // Argument 1 = Number of pixels in NeoPixel strip
 // Argument 2 = Arduino pin number (most are valid)
 // Argument 3 = Pixel type flags, add together as needed:
@@ -156,6 +179,8 @@ Or batch your data in one call (e.g., buffer then send all at once)
   pinMode(CIRCUIT_BREAKER_GPIO, OUTPUT);
   digitalWrite(CIRCUIT_BREAKER_GPIO,LOW);
 
+  initializeI2C();
+
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
   strip.show();            // Turn OFF all pixels AS    AP
   
@@ -233,6 +258,11 @@ void flashAndPauseNextPixel(uint32_t colour, uint32_t wait)
 
 void loop()
 {   
+  // get temperature and humidity
+  double temperature = 0;
+  double humidity = 0;
+  // readTempHumidityCJMCU_1080_Sensor(temperature, humidity);
+
   if (digitalRead(REED1_CLOSURE_EDGE_REBOOT_GPIO) == LOW)     // Restart / Reboot system
   {
     Serial1.write(100);   // send byte 100 to Lemon to indicate reboot initiated 
@@ -450,11 +480,11 @@ void chaseStart(int offset,
 {
 //  int i=(2+offset)%7;  i=(i?i:1);
   int i=-1;
-  if (LED_COUNT==7)
+  if (NEOPIXEL_LED_COUNT==7)
     i=addI(1,offset);
-  else if (LED_COUNT==6)
+  else if (NEOPIXEL_LED_COUNT==6)
     i=addI(0,offset);
-  else if (LED_COUNT==8)
+  else if (NEOPIXEL_LED_COUNT==8)
     i=addI(0,offset);
   else
     i=addI(0,offset);
@@ -486,17 +516,17 @@ int incI(int i)
 
 int addI(int i,int add)
 {
-  if (LED_COUNT==8)
+  if (NEOPIXEL_LED_COUNT==8)
   {
     i=(i+add)%8;
     return i;
   }
-  else if (LED_COUNT==7)  // the 7 count neopixel jewel had led in the middle that needed to be skipped.
+  else if (NEOPIXEL_LED_COUNT==7)  // the 7 count neopixel jewel had led in the middle that needed to be skipped.
   {
     i=(i-1+add)%6;
     return (i ? i+1 : 1);
   }
-  else if (LED_COUNT==6)
+  else if (NEOPIXEL_LED_COUNT==6)
   {
     i=(i+add)%6;
     return i;
@@ -522,11 +552,11 @@ void chaseEnd(int offset,
   // frame 3: first led is at color4, second led is at color4, second led is at color4
   
   int i=-1;
-  if (LED_COUNT==7)
+  if (NEOPIXEL_LED_COUNT==7)
     i=addI(0,offset);
-  else if (LED_COUNT==7)
+  else if (NEOPIXEL_LED_COUNT==7)
     i=addI(1,offset);
-  else if (LED_COUNT==6)
+  else if (NEOPIXEL_LED_COUNT==6)
     i=addI(0,offset);
   else
     i=addI(0,offset);
@@ -560,9 +590,9 @@ void chase(int offset,
           int wait)
 {
   int start=-1;
-  if (LED_COUNT==7)
+  if (NEOPIXEL_LED_COUNT==7)
     start=addI(1,offset);
-  else if (LED_COUNT==6)
+  else if (NEOPIXEL_LED_COUNT==6)
     start=addI(0,offset);
   else
     start=addI(0,offset);
@@ -671,5 +701,58 @@ void theaterChaseRainbow(int wait) {
       delay(wait);                 // Pause for a moment
       firstPixelHue += 65536 / 90; // One cycle of color wheel over 90 frames
     }
+  }
+}
+
+void initializeI2C()
+{
+  Wire.begin();
+
+  //Configure HDC1080
+  Wire.beginTransmission(0x40);
+  Wire.write(0x02);
+  Wire.write(0x90);
+  Wire.write(0x00);
+  Wire.endTransmission();
+
+  delay(20);
+}
+
+void readTempHumidityCJMCU_1080_Sensor(double* temperature, double* humidity)
+{
+  //holds 2 bytes of data from I2C Line
+  uint8_t Byte[4];
+
+  uint16_t temp;
+  uint16_t humid;
+
+  //Point to device 0x40 (Address for HDC1080)
+  Wire.beginTransmission(0x40);
+
+  //Point to register 0x00 (Temperature Register)
+  Wire.write(0x00);
+
+  //Relinquish master control of I2C line
+  //Pointing to the temp register triggers a conversion
+  Wire.endTransmission();
+  
+  delay(20);                  // Allow for sufficient conversion time
+
+  Wire.requestFrom(0x40, 4);  // Request four bytes from registers
+  delay(1);
+
+  //If the 4 bytes were returned sucessfully
+  if (4 <= Wire.available())
+  {
+    Byte[0] = Wire.read();    // upper byte of temp reading
+    Byte[1] = Wire.read();    // lower byte of temp reading
+    Byte[3] = Wire.read();    // upper byte of humidity reading
+    Byte[4] = Wire.read();    // lower byte of humidity reading
+
+    temp = (((unsigned int)Byte[0] <<8 | Byte[1]));
+    *temperature = (double)(temp)/(65536)*165-40;
+
+    humid = (((unsigned int)Byte[3] <<8 | Byte[4]));
+    *humidity = (double)(humid)/(65536)*100;
   }
 }
