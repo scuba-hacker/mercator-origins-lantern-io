@@ -41,14 +41,16 @@ void readTempHumidityCJMCU_1080_Sensor(double* temperature, double* humidity);
 #define REED2_SWITCH_SIDE_EDGE_POWER_OFF_ON_GPIO 5   // Connects to ground on close
 #define ARDUINO_BOARD_LED 13
 #define CIRCUIT_BREAKER_GPIO 15   // energises relay coil via NPN MOSFET
-#define CURRENT_SENSOR_ANALOG_IN_GPIO  XX
-#define VCC_HALVED_ANALOG_IN_GPIO      YY
+#define CURRENT_SENSOR_ANALOG_IN_GPIO  A6
+#define VCC_HALVED_ANALOG_IN_GPIO      A7
 #define LEAK_SENSOR_GPIO               LL   // leak at bottom of float
 #define IGNORE_FLOAT_LEAK_GPIO         SS   // on-off switch, suppress leak alerts from float - 
                               // once blue leak sensors get wet they will probably stay that way
 
 // HardwareSerial Serial1 TX_GPIO is on GPIO D0. Used to send a byte to Mako to say restarting.
 // HardwareSerial Serial1 RX_GPIO is on GPIO D1. Used to receive status for LEDs from Mako.
+
+int rawVccInSample, rawCurrentSample;
 
 #define NEOPIXEL_GPIO    6 // GPIO D6 for neopixel ring
 // Red Positive LED wire is connected to +5V
@@ -104,6 +106,7 @@ void theaterChase(uint32_t color, int wait);
 void rainbow(int wait);
 void theaterChaseRainbow(int wait);
 
+const bool lowPowerTest=true;
 
 void testTightSerialTxLoop()
 {
@@ -182,6 +185,10 @@ Or batch your data in one call (e.g., buffer then send all at once)
   pinMode(CIRCUIT_BREAKER_GPIO, OUTPUT);
   digitalWrite(CIRCUIT_BREAKER_GPIO,LOW);
 
+  analogReference(INTERNAL1V5);
+  rawVccInSample = analogRead(VCC_HALVED_ANALOG_IN_GPIO);
+  rawCurrentSample = analogRead(CURRENT_SENSOR_ANALOG_IN_GPIO);
+
   initializeI2C();
 
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
@@ -201,7 +208,8 @@ enum lemonPattern
   NO_GPS,
   NO_FIX,
   FIX,
-  LEAK
+  LEAK,
+  LOW_POWER_TEST
 };
 
 uint8_t nextByteToSend = 0;
@@ -264,6 +272,7 @@ void loop()
   // get temperature and humidity
   double temperature = 0;
   double humidity = 0;
+
   // readTempHumidityCJMCU_1080_Sensor(temperature, humidity);
 
   if (digitalRead(REED1_CLOSURE_EDGE_REBOOT_GPIO) == LOW)     // Restart / Reboot system
@@ -328,6 +337,12 @@ void loop()
     lastLemonStatus = LC_NONE;
 
   int ledWait=100;
+
+  if (lowPowerTest)
+  {
+    flashAndPauseNextPixel(strip.Color(10,10,0), 200);
+  return;
+  }
 
   // LC_DIVE_IN_PROGRESS flag reduces LED usage to save power
   switch(lastLemonStatus)
