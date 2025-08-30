@@ -23,7 +23,7 @@
 // #include <avr/power.h> // Required for 16 MHz Adafruit Trinket
 //#endif
 
-void initializeI2C();
+void initializeTempHumiditySensor();
 
 // https://kunkune.co.uk/shop/arduino-sensors/cjmcu-1080-high-precision-temperature-and-humidity-sensor-hdc1080/
 // https://www.ti.com/lit/ds/symlink/hdc1080.pdf
@@ -189,7 +189,7 @@ Or batch your data in one call (e.g., buffer then send all at once)
   rawVccInSample = analogRead(VCC_HALVED_ANALOG_IN_GPIO);
   rawCurrentSample = analogRead(CURRENT_SENSOR_ANALOG_IN_GPIO);
 
-  initializeI2C();
+  initializeTempHumiditySensor();
 
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
   strip.show();            // Turn OFF all pixels AS    AP
@@ -722,7 +722,7 @@ void theaterChaseRainbow(int wait) {
   }
 }
 
-void initializeI2C()
+void initializeTempHumiditySensor()
 {
   Wire.begin();
 
