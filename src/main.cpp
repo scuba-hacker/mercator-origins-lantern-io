@@ -10,6 +10,22 @@
 
 #include <Adafruit_NeoPixel.h>
 #include <Wire.h>
+#include <Adafruit_INA219.h>
+
+const uint32_t serialBaud = 38400;
+
+Adafruit_INA219 currentSensor_ina219;
+
+float shuntVoltage=0,busVoltage=0,current_mA=0,loadVoltage=0,power_mW=0,total_mA=0,total_mAH=0;
+float max_current_ma=0, min_load_voltage=10, max_load_voltage=0, powerOnSec=0;
+void accumulateEnergyUsage();
+float temperature = 0, humidity = 0;
+
+char sensorData[256];
+const uint32_t sendSensorDataDutyCycle = 1000;
+uint32_t nextTimeToSendSensorData = 0;
+
+void sendSensorDataWhenReady();
 
 // This is not needed for Arduino Nano Every.
 // Although AVR is defined, it 
@@ -29,7 +45,7 @@ void initializeTempHumiditySensor();
 // https://www.ti.com/lit/ds/symlink/hdc1080.pdf
 // Uses TI HDC1080 IC
 // I2C Address: 0x40
-void readTempHumidityCJMCU_1080_Sensor(double* temperature, double* humidity);
+void readTempHumidityCJMCU_1080_Sensor(float& Temperature, float& Humidity);
 
 // Current sensor GY-471 MAX471
 // https://www.analog.com/en/products/max471.html
@@ -41,16 +57,14 @@ void readTempHumidityCJMCU_1080_Sensor(double* temperature, double* humidity);
 #define REED2_SWITCH_SIDE_EDGE_POWER_OFF_ON_GPIO 5   // Connects to ground on close
 #define ARDUINO_BOARD_LED 13
 #define CIRCUIT_BREAKER_GPIO 15   // energises relay coil via NPN MOSFET
-#define CURRENT_SENSOR_ANALOG_IN_GPIO  A6
-#define VCC_HALVED_ANALOG_IN_GPIO      A7
+#define CURRENT_SENSOR_ANALOG_IN_GPIO  A6   // not used
+#define VCC_HALVED_ANALOG_IN_GPIO      A7   // not used
 #define LEAK_SENSOR_GPIO               LL   // leak at bottom of float
 #define IGNORE_FLOAT_LEAK_GPIO         SS   // on-off switch, suppress leak alerts from float - 
                               // once blue leak sensors get wet they will probably stay that way
 
-// HardwareSerial Serial1 TX_GPIO is on GPIO D0. Used to send a byte to Mako to say restarting.
+// HardwareSerial Serial1 TX_GPIO is on GPIO D0. Used to send a byte to Mako to say restarting and to send sensor data.
 // HardwareSerial Serial1 RX_GPIO is on GPIO D1. Used to receive status for LEDs from Mako.
-
-int rawVccInSample, rawCurrentSample;
 
 #define NEOPIXEL_GPIO    6 // GPIO D6 for neopixel ring
 // Red Positive LED wire is connected to +5V
@@ -106,7 +120,7 @@ void theaterChase(uint32_t color, int wait);
 void rainbow(int wait);
 void theaterChaseRainbow(int wait);
 
-const bool lowPowerTest=true;
+const bool lowPowerTest=false;
 
 void testTightSerialTxLoop()
 {
@@ -120,7 +134,7 @@ void testTightSerialTxLoop()
 }
 
 void setup() {
-  Serial1.begin(9600);  // on TX output there is a 1k and 2k voltage divider to reduce voltage from 5V to 3.3V for ESP32
+  Serial1.begin(serialBaud);  // on TX output there is a 1k and 2k voltage divider to reduce voltage from 5V to 3.3V for ESP32
 
   while (!Serial1); // needed on Arduino Nano Every 
 
@@ -180,14 +194,31 @@ Or batch your data in one call (e.g., buffer then send all at once)
 
 */
 
+  Serial.begin(115200);
+  while (!Serial); // needed on Arduino Nano Every 
+  Serial.flush();
+
   pinMode(REED1_CLOSURE_EDGE_REBOOT_GPIO, INPUT_PULLUP);
   pinMode(REED2_SWITCH_SIDE_EDGE_POWER_OFF_ON_GPIO, INPUT_PULLUP);
   pinMode(CIRCUIT_BREAKER_GPIO, OUTPUT);
   digitalWrite(CIRCUIT_BREAKER_GPIO,LOW);
 
-  analogReference(INTERNAL1V5);
-  rawVccInSample = analogRead(VCC_HALVED_ANALOG_IN_GPIO);
-  rawCurrentSample = analogRead(CURRENT_SENSOR_ANALOG_IN_GPIO);
+  // Try to initialize the INA219
+  if (! currentSensor_ina219.begin()) {
+    Serial.println("Failed to find current sensor INA219 chip");
+    while (1) { delay(10); }
+  }
+  else
+  {
+    Serial.println("Found current sensor INA219 chip");
+  }
+  
+  // By default the INA219 will be calibrated with a range of 32V, 2A.
+  // However uncomment one of the below to change the range.  A smaller
+  // range can't measure as large of values but will measure with slightly
+  // better precision.
+  //ina219.setCalibration_32V_1A();
+  //ina219.setCalibration_16V_400mA();
 
   initializeTempHumiditySensor();
 
@@ -267,18 +298,36 @@ void flashAndPauseNextPixel(uint32_t colour, uint32_t wait)
   delay(wait);
 }
 
-void loop()
-{   
-  // get temperature and humidity
-  double temperature = 0;
-  double humidity = 0;
+void sendRebootInitiated()
+{
+  const char rebootMessage[] = "{\"type\":\"lanternReboot\"}\n";
+  Serial1.write(rebootMessage);
+  Serial1.flush();
+}
 
-  // readTempHumidityCJMCU_1080_Sensor(temperature, humidity);
+void sendPowerOnInitiated()
+{
+  const char powerOnMessage[] = "{\"type\":\"lanternPowerOn\"}\n";
+  Serial1.write(powerOnMessage);
+  Serial1.flush();
+}
+
+void sendPowerOffInitiated()
+{
+  const char powerOffMessage[] = "{\"type\":\"lanternPowerOff\"}\n";
+  Serial1.write(powerOffMessage);
+  Serial1.flush();
+}
+
+void loop()
+{
+  accumulateEnergyUsage();
+  sendSensorDataWhenReady();
 
   if (digitalRead(REED1_CLOSURE_EDGE_REBOOT_GPIO) == LOW)     // Restart / Reboot system
   {
-    Serial1.write(100);   // send byte 100 to Lemon to indicate reboot initiated 
-    Serial1.flush();
+    sendRebootInitiated();
+
     strip.fill(strip.Color(0,10,0),0,8);
     strip.show();                          //  Update strip to match
     digitalWrite(CIRCUIT_BREAKER_GPIO,HIGH);
@@ -294,9 +343,9 @@ void loop()
   {
     if (circuitBreakerTripped)
     {
+      sendPowerOnInitiated();
+
       // All green LEDs, disable the circuit breaker - turns on the rest of the system.
-      Serial1.write(200);   // send byte 200 to Lemon to indicate power-up initiated 
-      Serial1.flush();
       strip.fill(strip.Color(0,10,0),0,8);
       strip.fill(strip.Color(255,0,0),0,8);
       strip.show();
@@ -308,9 +357,9 @@ void loop()
     }
     else
     {
+      sendPowerOffInitiated();
+
       // All red LEDs, enable the circuit breaker - turns off the rest of the system.
-      Serial1.write(200);  // send byte 200 to Lemon to indicate power-down initiated 
-      Serial1.flush();
       strip.fill(strip.Color(0,255,0),0,8);
       strip.show();
       digitalWrite(CIRCUIT_BREAKER_GPIO,HIGH);
@@ -341,7 +390,7 @@ void loop()
   if (lowPowerTest)
   {
     flashAndPauseNextPixel(strip.Color(10,10,0), 200);
-  return;
+    return;
   }
 
   // LC_DIVE_IN_PROGRESS flag reduces LED usage to save power
@@ -722,21 +771,71 @@ void theaterChaseRainbow(int wait) {
   }
 }
 
-void initializeTempHumiditySensor()
+void sendSensorDataWhenReady()
 {
-  Wire.begin();
+  if (millis() >= nextTimeToSendSensorData)
+  {
+    nextTimeToSendSensorData += sendSensorDataDutyCycle;
 
-  //Configure HDC1080
+    readTempHumidityCJMCU_1080_Sensor(temperature, humidity);
+
+    snprintf(sensorData,sizeof(sensorData),
+      "{\"type\":\"lanternReadings\", \"Temp\":%f, \"Humid\":%f, \"I\":%f,\"V\":%f,\"mAH\":%f,\"Imax\":%f,\"Vmin\":%f,\"Vmax\":%f}\n",
+      temperature, humidity, current_mA, loadVoltage, total_mAH, max_current_ma, min_load_voltage, max_load_voltage);
+
+    Serial1.write(sensorData);
+    Serial1.flush();
+
+    Serial.write(sensorData);
+    Serial.flush();
+  }
+}
+
+void accumulateEnergyUsage()
+{
+  const  uint32_t energyCalcsDutyCycle = 100;
+  static uint32_t nextEnergyCalcDue = 0;
+
+  if (millis() >= nextEnergyCalcDue)
+  {
+    nextEnergyCalcDue += energyCalcsDutyCycle;
+
+    // Read voltage and current from INA219.
+    shuntVoltage = currentSensor_ina219.getShuntVoltage_mV();
+    busVoltage = currentSensor_ina219.getBusVoltage_V();
+    current_mA = currentSensor_ina219.getCurrent_mA();
+
+    // Compute load voltage, power, and milliamp-hours.
+    loadVoltage = busVoltage + (shuntVoltage / 1000.0);
+    power_mW = loadVoltage * current_mA;
+
+    total_mA += current_mA;
+    powerOnSec += energyCalcsDutyCycle / 1000.0;
+
+    const float dutyCyclesInOneHour = 3600000.0 / energyCalcsDutyCycle;
+    total_mAH = total_mA / dutyCyclesInOneHour;
+
+    max_current_ma = (current_mA > max_current_ma ? current_mA : max_current_ma);
+    min_load_voltage = (loadVoltage < min_load_voltage ? loadVoltage : min_load_voltage);
+    max_load_voltage = (loadVoltage > max_load_voltage ? loadVoltage : max_load_voltage);
+  }
+}
+
+//  Wire.write(0x10);   // 0x1000 = both 14-bit resolution, acquisition mode
+
+void initializeTempHumiditySensor() {
+ Wire.begin();
+  delay(50); // allow full power-up
+
   Wire.beginTransmission(0x40);
-  Wire.write(0x02);
+  Wire.write(0x02);   // configuration register
   Wire.write(0x90);
   Wire.write(0x00);
   Wire.endTransmission();
-
   delay(20);
 }
 
-void readTempHumidityCJMCU_1080_Sensor(double* temperature, double* humidity)
+void readTempHumidityCJMCU_1080_Sensor(float& Temperature, float& Humidity)
 {
   //holds 2 bytes of data from I2C Line
   uint8_t Byte[4];
@@ -754,7 +853,7 @@ void readTempHumidityCJMCU_1080_Sensor(double* temperature, double* humidity)
   //Pointing to the temp register triggers a conversion
   Wire.endTransmission();
   
-  delay(20);                  // Allow for sufficient conversion time
+  delay(25);                  // Allow for sufficient conversion time
 
   Wire.requestFrom(0x40, 4);  // Request four bytes from registers
   delay(1);
@@ -764,13 +863,13 @@ void readTempHumidityCJMCU_1080_Sensor(double* temperature, double* humidity)
   {
     Byte[0] = Wire.read();    // upper byte of temp reading
     Byte[1] = Wire.read();    // lower byte of temp reading
-    Byte[3] = Wire.read();    // upper byte of humidity reading
-    Byte[4] = Wire.read();    // lower byte of humidity reading
+    Byte[2] = Wire.read();    // upper byte of humidity reading
+    Byte[3] = Wire.read();    // lower byte of humidity reading
 
     temp = (((unsigned int)Byte[0] <<8 | Byte[1]));
-    *temperature = (double)(temp)/(65536)*165-40;
+    Temperature = ((float)temp) *165.0 / 65536.0;     // deliberately not -40 due to now being genuine chip
 
-    humid = (((unsigned int)Byte[3] <<8 | Byte[4]));
-    *humidity = (double)(humid)/(65536)*100;
+    humid = (((unsigned int)Byte[2] <<8 | Byte[3]));
+    Humidity = ((float)(humid)) * 100.0 / 65536.0;
   }
 }
