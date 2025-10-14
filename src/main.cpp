@@ -16,7 +16,7 @@ const uint32_t serialBaud = 38400;
 
 Adafruit_INA219 currentSensor_ina219;
 
-float shuntVoltage=0,busVoltage=0,current_mA=0,loadVoltage=0,power_mW=0,total_mA=0,total_mAH=0;
+float shuntVoltage=0,busVoltage=0,current_mA=0,loadVoltage=0,power_mW=0,power_mW_hardware=0, total_mA=0,total_mAH=0;
 float max_current_ma=0, min_load_voltage=10, max_load_voltage=0, powerOnSec=0;
 void accumulateEnergyUsage();
 float temperature = 0, humidity = 0;
@@ -24,6 +24,10 @@ float temperature = 0, humidity = 0;
 char sensorData[256];
 const uint32_t sendSensorDataDutyCycle = 1000;
 uint32_t nextTimeToSendSensorData = 0;
+
+const uint32_t readSensorDataDutyCycle = 50;
+uint32_t nextTimeReadSensorData = 0;
+
 
 void sendSensorDataWhenReady();
 
@@ -211,6 +215,7 @@ Or batch your data in one call (e.g., buffer then send all at once)
   else
   {
     Serial.println("Found current sensor INA219 chip");
+    currentSensor_ina219.setCalibration_32V_2A();      // Most common: 32V, 2A max
   }
   
   // By default the INA219 will be calibrated with a range of 32V, 2A.
@@ -773,21 +778,26 @@ void theaterChaseRainbow(int wait) {
 
 void sendSensorDataWhenReady()
 {
-  if (millis() >= nextTimeToSendSensorData)
+  if (millis() >= nextTimeReadSensorData)
   {
-    nextTimeToSendSensorData += sendSensorDataDutyCycle;
-
+    nextTimeReadSensorData += readSensorDataDutyCycle;
     readTempHumidityCJMCU_1080_Sensor(temperature, humidity);
 
-    snprintf(sensorData,sizeof(sensorData),
-      "{\"type\":\"lanternReadings\", \"Temp\":%f, \"Humid\":%f, \"I\":%f,\"V\":%f,\"mAH\":%f,\"Imax\":%f,\"Vmin\":%f,\"Vmax\":%f}\n",
-      temperature, humidity, current_mA, loadVoltage, total_mAH, max_current_ma, min_load_voltage, max_load_voltage);
 
-    Serial1.write(sensorData);
-    Serial1.flush();
+    if (millis() >= nextTimeToSendSensorData)
+    {
+      nextTimeToSendSensorData += sendSensorDataDutyCycle;
 
-    Serial.write(sensorData);
-    Serial.flush();
+      snprintf(sensorData,sizeof(sensorData),
+        "{\"type\":\"lanternReadings\", \"Temp\":%f, \"Humid\":%f, \"I\":%f,\"V\":%f,\"mAH\":%f,\"Imax\":%f,\"Vmin\":%f,\"Vmax\":%f,\"mwMax\":%f}\n",
+        temperature, humidity, current_mA, loadVoltage, total_mAH, max_current_ma, min_load_voltage, max_load_voltage,power_mW_hardware);
+
+      Serial1.write(sensorData);
+      Serial1.flush();
+
+      Serial.write(sensorData);
+      Serial.flush();
+    }
   }
 }
 
@@ -802,8 +812,25 @@ void accumulateEnergyUsage()
 
     // Read voltage and current from INA219.
     shuntVoltage = currentSensor_ina219.getShuntVoltage_mV();
+//    snprintf(sensorData,sizeof(sensorData),"Shunt Voltage Success: %d %f",currentSensor_ina219.success(),shuntVoltage);
+//    Serial.print(sensorData);
+//    Serial.println();
+
     busVoltage = currentSensor_ina219.getBusVoltage_V();
+//    snprintf(sensorData,sizeof(sensorData),"Bus Voltage Success: %d %f",currentSensor_ina219.success(),busVoltage);
+//    Serial.print(sensorData);
+//    Serial.println();
+
     current_mA = currentSensor_ina219.getCurrent_mA();
+//    snprintf(sensorData,sizeof(sensorData),"current_mA Success: %d %f",currentSensor_ina219.success(),current_mA);
+//    Serial.print(sensorData);
+//    Serial.println();
+
+
+    power_mW_hardware = currentSensor_ina219.getPower_mW();
+//    snprintf(sensorData,sizeof(sensorData),"power_mW Success: %d %f",currentSensor_ina219.success(),power_mW);
+//    Serial.print(sensorData);
+//    Serial.println();
 
     // Compute load voltage, power, and milliamp-hours.
     loadVoltage = busVoltage + (shuntVoltage / 1000.0);
