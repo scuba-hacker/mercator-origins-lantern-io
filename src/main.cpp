@@ -19,7 +19,7 @@ Adafruit_INA219 currentSensor_ina219;
 Adafruit_AHTX0 tempHumiditySensor;
 
 float shuntVoltage=0,busVoltage=0,current_mA=0,loadVoltage=0,power_mW=0,power_mW_hardware=0, total_mA=0,total_mAH=0;
-float max_current_ma=0, min_load_voltage=10, max_load_voltage=0, powerOnSec=0;
+float max_current_ma=0, min_load_voltage=10, max_load_voltage=0, max_power_mW_hardware=0, powerOnSec=0;
 void accumulateEnergyUsage();
 float temperature = 0, humidity = 0;
 
@@ -1043,8 +1043,8 @@ void sendSensorDataWhenReady()
     nextTimeToSendSensorData += sendSensorDataDutyCycle;
 
     snprintf(sensorData, sizeof(sensorData),
-      "{\"type\":\"lanternReadings\", \"Temp\":%f, \"Humid\":%f, \"I\":%f,\"V\":%f,\"mAH\":%f,\"Imax\":%f,\"Vmin\":%f,\"Vmax\":%f,\"mwMax\":%f}\n",
-      temperature, humidity, current_mA, loadVoltage, total_mAH, max_current_ma, min_load_voltage, max_load_voltage, power_mW_hardware);
+      "{\"type\":\"lanternReadings\", \"Temp\":%f, \"Humid\":%f, \"I\":%f,\"V\":%f,\"mWH_hardware\":%f,\"mAH\":%f,\"Imax\":%f,\"Vmin\":%f,\"Vmax\":%f,\"mwMax_hardware\":%f}\n",
+      temperature, humidity, current_mA, loadVoltage, power_mW_hardware, total_mAH, max_current_ma, min_load_voltage, max_load_voltage, max_power_mW_hardware);
 
     Serial1.write(sensorData);
     // Serial1.flush();  // Remove blocking flush for async animations
@@ -1348,5 +1348,6 @@ void accumulateEnergyUsage()
     max_current_ma = (current_mA > max_current_ma ? current_mA : max_current_ma);
     min_load_voltage = (loadVoltage < min_load_voltage ? loadVoltage : min_load_voltage);
     max_load_voltage = (loadVoltage > max_load_voltage ? loadVoltage : max_load_voltage);
+    max_power_mW_hardware = (power_mW > max_power_mW_hardware ? power_mW : max_power_mW_hardware);
   }
 }
