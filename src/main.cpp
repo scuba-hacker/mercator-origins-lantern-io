@@ -104,6 +104,7 @@ int globalOffset = 0;
 const int daytimeBrightness = 255;
 const int nighttimeBrightness = 50;
 const int rainbowBrightness = 30;       // 65mA for 30, set at 255 current is   210mA
+const int minimumBrightness = 1;        // if 0 then the brightness scaling is not applied
 
 int currentBrightness = 0;
 
@@ -247,9 +248,15 @@ void updateBrightnessRamp() {
     }
   }
 }
-void setup() {
-  Serial1.begin(serialBaud);  // on TX output there is a 1k and 2k voltage divider to reduce voltage from 5V to 3.3V for ESP32
 
+void setup() {
+  // Initialize NeoPixel FIRST to prevent bright flash on boot
+  strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
+  strip.clear();           // Clear all pixel data
+  strip.setBrightness(1);  // Start at minimum brightness (0 = no scaling = max brightness!)
+  strip.show();            // Update strip immediately to turn off all pixels  
+
+  Serial1.begin(serialBaud);  // on TX output there is a 1k and 2k voltage divider to reduce voltage from 5V to 3.3V for ESP32
   while (!Serial1); // needed on Arduino Nano Every 
 
 /*
@@ -342,11 +349,6 @@ Or batch your data in one call (e.g., buffer then send all at once)
   // better precision.
   //ina219.setCalibration_32V_1A();
   //ina219.setCalibration_16V_400mA();
-
-  strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
-  strip.show();            // Turn OFF all pixels AS    AP
-  
-  strip.setBrightness(0);  // Start at 0 brightness for ramp-up
   
   // Initialize brightness ramp-up system
   brightnessRampStartTime = millis();
@@ -1378,6 +1380,7 @@ void accumulateEnergyUsage()
 
     // Read voltage and current from INA219.
     shuntVoltage = currentSensor_ina219.getShuntVoltage_mV();
+    busVoltage = currentSensor_ina219.getBusVoltage_V();
     current_mA = currentSensor_ina219.getCurrent_mA();
     power_mW_hardware = currentSensor_ina219.getPower_mW();
 
