@@ -11,10 +11,12 @@
 #include <Adafruit_NeoPixel.h>
 #include <Wire.h>
 #include <Adafruit_INA219.h>
+#include <Adafruit_AHTX0.h>
 
 const uint32_t serialBaud = 38400;
 
 Adafruit_INA219 currentSensor_ina219;
+Adafruit_AHTX0 tempHumiditySensor;
 
 float shuntVoltage=0,busVoltage=0,current_mA=0,loadVoltage=0,power_mW=0,power_mW_hardware=0, total_mA=0,total_mAH=0;
 float max_current_ma=0, min_load_voltage=10, max_load_voltage=0, powerOnSec=0;
@@ -43,13 +45,6 @@ void sendSensorDataWhenReady();
 // #include <avr/power.h> // Required for 16 MHz Adafruit Trinket
 //#endif
 
-void initializeTempHumiditySensor();
-
-// https://kunkune.co.uk/shop/arduino-sensors/cjmcu-1080-high-precision-temperature-and-humidity-sensor-hdc1080/
-// https://www.ti.com/lit/ds/symlink/hdc1080.pdf
-// Uses TI HDC1080 IC
-// I2C Address: 0x40
-void readTempHumidityCJMCU_1080_Sensor(float& Temperature, float& Humidity);
 
 // Current sensor GY-471 MAX471
 // https://www.analog.com/en/products/max471.html
@@ -207,7 +202,6 @@ Or batch your data in one call (e.g., buffer then send all at once)
   pinMode(CIRCUIT_BREAKER_GPIO, OUTPUT);
   digitalWrite(CIRCUIT_BREAKER_GPIO,LOW);
 
-  // Try to initialize the INA219
   if (! currentSensor_ina219.begin()) {
     Serial.println("Failed to find current sensor INA219 chip");
     while (1) { delay(10); }
@@ -218,14 +212,17 @@ Or batch your data in one call (e.g., buffer then send all at once)
     currentSensor_ina219.setCalibration_32V_2A();      // Most common: 32V, 2A max
   }
   
+  if (!tempHumiditySensor.begin()) 
+    Serial.println("Failed to find AHT20 temperature & humidity sensor");
+  else
+    Serial.println("Found AHT20 temperature & humidity sensor");
+
   // By default the INA219 will be calibrated with a range of 32V, 2A.
   // However uncomment one of the below to change the range.  A smaller
   // range can't measure as large of values but will measure with slightly
   // better precision.
   //ina219.setCalibration_32V_1A();
   //ina219.setCalibration_16V_400mA();
-
-  initializeTempHumiditySensor();
 
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
   strip.show();            // Turn OFF all pixels AS    AP
@@ -234,8 +231,6 @@ Or batch your data in one call (e.g., buffer then send all at once)
 
   globalOffset=0;
 }
-
-uint8_t byteFromLemon = 0xFF;
 
 enum lemonPattern
 {
@@ -266,20 +261,20 @@ e_lemon_status flushLemonStatus()
 
 e_lemon_status readLemonStatus()
 {
-  e_lemon_status byteFromLemon = LC_NO_STATUS_UPDATE;
+  e_lemon_status byteReceived = LC_NO_STATUS_UPDATE;
 
   while (Serial1.available())
   {
-    byteFromLemon = (e_lemon_status) (Serial1.read());
+    byteReceived = (e_lemon_status) (Serial1.read());
     timeOfNextLemonByteExpectedReceived = millis() + maximumWaitForLemonByteReceived;
   }
 
   if (millis() > timeOfNextLemonByteExpectedReceived)
   {
-    byteFromLemon = LC_NONE;
+    byteReceived = LC_NONE;
   }
 
-  return byteFromLemon;
+  return byteReceived;
 }
 
 uint32_t nextStatusCheck = 1000;
@@ -781,8 +776,11 @@ void sendSensorDataWhenReady()
   if (millis() >= nextTimeReadSensorData)
   {
     nextTimeReadSensorData += readSensorDataDutyCycle;
-    readTempHumidityCJMCU_1080_Sensor(temperature, humidity);
+    sensors_event_t tempRead, humidityRead, sensorRead;
+    tempHumiditySensor.getEvent(&tempRead, &humidityRead);
 
+    humidity=tempRead.relative_humidity;
+    temperature=humidityRead.temperature;
 
     if (millis() >= nextTimeToSendSensorData)
     {
@@ -845,58 +843,5 @@ void accumulateEnergyUsage()
     max_current_ma = (current_mA > max_current_ma ? current_mA : max_current_ma);
     min_load_voltage = (loadVoltage < min_load_voltage ? loadVoltage : min_load_voltage);
     max_load_voltage = (loadVoltage > max_load_voltage ? loadVoltage : max_load_voltage);
-  }
-}
-
-//  Wire.write(0x10);   // 0x1000 = both 14-bit resolution, acquisition mode
-
-void initializeTempHumiditySensor() {
- Wire.begin();
-  delay(50); // allow full power-up
-
-  Wire.beginTransmission(0x40);
-  Wire.write(0x02);   // configuration register
-  Wire.write(0x90);
-  Wire.write(0x00);
-  Wire.endTransmission();
-  delay(20);
-}
-
-void readTempHumidityCJMCU_1080_Sensor(float& Temperature, float& Humidity)
-{
-  //holds 2 bytes of data from I2C Line
-  uint8_t Byte[4];
-
-  uint16_t temp;
-  uint16_t humid;
-
-  //Point to device 0x40 (Address for HDC1080)
-  Wire.beginTransmission(0x40);
-
-  //Point to register 0x00 (Temperature Register)
-  Wire.write(0x00);
-
-  //Relinquish master control of I2C line
-  //Pointing to the temp register triggers a conversion
-  Wire.endTransmission();
-  
-  delay(25);                  // Allow for sufficient conversion time
-
-  Wire.requestFrom(0x40, 4);  // Request four bytes from registers
-  delay(1);
-
-  //If the 4 bytes were returned sucessfully
-  if (4 <= Wire.available())
-  {
-    Byte[0] = Wire.read();    // upper byte of temp reading
-    Byte[1] = Wire.read();    // lower byte of temp reading
-    Byte[2] = Wire.read();    // upper byte of humidity reading
-    Byte[3] = Wire.read();    // lower byte of humidity reading
-
-    temp = (((unsigned int)Byte[0] <<8 | Byte[1]));
-    Temperature = ((float)temp) *165.0 / 65536.0;     // deliberately not -40 due to now being genuine chip
-
-    humid = (((unsigned int)Byte[2] <<8 | Byte[3]));
-    Humidity = ((float)(humid)) * 100.0 / 65536.0;
   }
 }
