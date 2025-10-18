@@ -19,7 +19,14 @@ Adafruit_INA219 currentSensor_ina219;
 Adafruit_AHTX0 tempHumiditySensor;
 
 float shuntVoltage=0,busVoltage=0,current_mA=0,loadVoltage=0,power_mW=0,power_mW_hardware=0, total_mA=0,total_mAH=0;
-float max_current_ma=0, min_load_voltage=10, max_load_voltage=0, max_power_mW_hardware=0, powerOnSec=0;
+float max_current_mA=0, min_load_voltage=10, max_load_voltage=0, max_power_mW_hardware=0, powerOnSec=0;
+float avg_current_mA=0, avg_power_mW=0;
+float current_accumulator = 0, power_accumulator = 0;
+uint16_t accumulation_samples = 0;
+
+uint32_t calcNextAverageAt = 0;
+const uint32_t averageCalcInterval = 5000;
+
 void accumulateEnergyUsage();
 float temperature = 0, humidity = 0;
 
@@ -33,6 +40,9 @@ const uint32_t initialRainbowPeriod = 7000;   // was 7
 
 uint32_t timeOfNextLemonByteExpectedReceived = 0;   // Will be set properly in setup()
 const uint32_t maximumWaitForLemonByteReceived = 7000; // if no comms from Lemon for 60 seconds then flash red to show no comms (LC_NONE)
+
+bool debugBrightnessRamp = false;
+bool writeSensorDataToUSBSerial = false;
 
 void readAsyncTempHumidity();
 void sendSensorDataWhenReady();
@@ -196,6 +206,47 @@ void testTightSerialTxLoop()
   delayMicroseconds(1);
 }
 
+
+// Brightness ramp-up system for startup (reduces inrush current)
+const uint32_t brightnessRampDuration = 3000;  // multi second ramp-up for gentler current increase
+uint32_t brightnessRampStartTime = 0;          // Set in setup()
+bool brightnessRampComplete = false;
+
+
+void updateBrightnessRamp() {
+  if (debugBrightnessRamp)
+  {
+    Serial.print("updateBrightnessRamp called, complete=");
+    Serial.print(brightnessRampComplete);
+    Serial.print(", current brightness=");
+    Serial.println(strip.getBrightness());
+  }
+    
+  if (brightnessRampComplete) {
+    return;  // Already ramped up, nothing to do
+  }
+  
+  uint32_t elapsed = millis() - brightnessRampStartTime;
+  
+  if (elapsed >= brightnessRampDuration) {
+    // Ramp complete, set to target brightness
+    strip.setBrightness(rainbowBrightness);
+    brightnessRampComplete = true;
+
+    if (debugBrightnessRamp)
+      Serial.println("Ramp complete, set to rainbowBrightness");
+  } else {
+    // Calculate current brightness based on elapsed time
+    // Linear ramp from 0 to rainbowBrightness over brightnessRampDuration
+    uint8_t currentBrightness = (rainbowBrightness * elapsed) / brightnessRampDuration;
+    strip.setBrightness(currentBrightness);
+    if (debugBrightnessRamp)
+    {
+      Serial.print("Ramping, set to ");
+      Serial.println(currentBrightness);
+    }
+  }
+}
 void setup() {
   Serial1.begin(serialBaud);  // on TX output there is a 1k and 2k voltage divider to reduce voltage from 5V to 3.3V for ESP32
 
@@ -295,7 +346,11 @@ Or batch your data in one call (e.g., buffer then send all at once)
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
   strip.show();            // Turn OFF all pixels AS    AP
   
-  strip.setBrightness(daytimeBrightness);
+  strip.setBrightness(0);  // Start at 0 brightness for ramp-up
+  
+  // Initialize brightness ramp-up system
+  brightnessRampStartTime = millis();
+  brightnessRampComplete = false;
 
   globalOffset=0;
   
@@ -403,6 +458,11 @@ void loop()
   readAsyncTempHumidity();
   sendSensorDataWhenReady();
   
+  // Update brightness ramp-up independently of animations (only during startup)
+  if (lastLemonStatus == LC_STARTUP || (lastLemonStatus == (LC_STARTUP | LC_DIVE_IN_PROGRESS))) {
+    updateBrightnessRamp();
+  }
+  
   // Update animation system only if using async animations
   if (useAsyncAnimations) {
     updateAnimations();
@@ -462,6 +522,25 @@ void loop()
     e_lemon_status newStatus = readLemonStatus();
     if (newStatus != LC_NO_STATUS_UPDATE && newStatus != lastLemonStatus)
     {
+      if (debugBrightnessRamp)
+      {
+        Serial.print("Status change: ");
+        Serial.print(lastLemonStatus);
+        Serial.print(" -> ");
+        Serial.println(newStatus);
+      }
+
+      // If transitioning away from LC_STARTUP, set brightness to daytime level
+      if (lastLemonStatus == LC_STARTUP && newStatus != LC_STARTUP) {
+        strip.setBrightness(daytimeBrightness);
+        
+        if (debugBrightnessRamp)
+        {
+          Serial.print("Transitioning from LC_STARTUP, setting brightness to: ");
+          Serial.println(daytimeBrightness);
+        }
+      }
+      
       lastLemonStatus = newStatus;
       // Stop current animation so the new status animation can start
       if (useAsyncAnimations) {
@@ -472,12 +551,15 @@ void loop()
 
   if (lastLemonStatus == LC_STARTUP && millis() > initialRainbowPeriod)
   {
-    if (lastLemonStatus != LC_NONE) {
-      lastLemonStatus = LC_NONE;
-      // Stop current animation so LC_NONE animation can start
-      if (useAsyncAnimations) {
-        stopCurrentAnimation();
-      }
+    // Set brightness FIRST, before changing status
+    strip.setBrightness(daytimeBrightness);
+    
+    // Now change status (this prevents updateBrightnessRamp from running on next loop)
+    lastLemonStatus = LC_NONE;
+    
+    // Stop current animation so LC_NONE animation can start
+    if (useAsyncAnimations) {
+      stopCurrentAnimation();
     }
   }
 
@@ -541,14 +623,8 @@ void loop()
     {
       if (useAsyncAnimations) {
         if (!isAnimationActive()) {
-          strip.setBrightness(rainbowBrightness);
-          Serial.print("Starting rainbow animation, active: ");
-          Serial.println(isAnimationActive());
-          bool started = startAnimation(ANIM_RAINBOW, 0, 0, 0, 0, 1, 0, 1);  // 1 cycle, 1ms per frame (matches sync)
-          Serial.print("Animation started: ");
-          Serial.println(started);
-          Serial.print("Now active: ");
-          Serial.println(isAnimationActive());
+          // Brightness is managed by updateBrightnessRamp() - no manual setBrightness needed
+          startAnimation(ANIM_RAINBOW, 0, 0, 0, 0, 1, 0, 1);  // 1 cycle, 1ms per frame (matches sync)
         }
       } else {
         // Original synchronous code
@@ -1055,14 +1131,13 @@ void sendSensorDataWhenReady()
     nextTimeToSendSensorData += sendSensorDataDutyCycle;
 
     snprintf(sensorData, sizeof(sensorData),
-      "{\"type\":\"lanternReadings\", \"Temp\":%f, \"Humid\":%f, \"I\":%f,\"V\":%f,\"mWH_hardware\":%f,\"mAH\":%f,\"Imax\":%f,\"Vmin\":%f,\"Vmax\":%f,\"mwMax_hardware\":%f}\n",
-      temperature, humidity, current_mA, loadVoltage, power_mW_hardware, total_mAH, max_current_ma, min_load_voltage, max_load_voltage, max_power_mW_hardware);
+      "{\"type\":\"lanternReadings\", \"Temp\":%f, \"Humid\":%f, \"I\":%f,\"V\":%f,\"mWH_hardware\":%f,\"mAH\":%f,\"Imax\":%f,\"Iavg\":%f,\"Vmin\":%f,\"Vmax\":%f,\"mwMax_hardware\":%f}\n",
+      temperature, humidity, current_mA, loadVoltage, power_mW_hardware, total_mAH, max_current_mA, avg_current_mA, min_load_voltage, max_load_voltage, max_power_mW_hardware);
 
     Serial1.write(sensorData);
-    // Serial1.flush();  // Remove blocking flush for async animations
 
-    Serial.write(sensorData);
-    // Serial.flush();   // Remove blocking flush for async animations
+    if (writeSensorDataToUSBSerial)
+      Serial.print(sensorData);
   }
 }
 
@@ -1089,16 +1164,7 @@ bool startAnimation(AnimationType type, uint32_t color1, uint32_t color2, uint32
     anim_state.animation_active = true;
     anim_state.next_frame_time = millis();
     anim_state.frame_counter = 0;
-    anim_state.step_counter = 0;  // Always reset step counter for clean start
-    
-    if (type == ANIM_RAINBOW) {
-      Serial.print("🌈 Starting RAINBOW animation with ");
-      Serial.print(wait);
-      Serial.print("ms delay, ");
-      Serial.print(repeat_count);
-      Serial.println(" cycles");
-    }
-    
+    anim_state.step_counter = 0;  // Always reset step counter for clean start    
     return true;
   } 
   else if (mode == ANIM_MODE_QUEUE) {
@@ -1226,17 +1292,6 @@ void processChaseFrame() {
 // Async Rainbow Implementation 
 void processRainbowFrame() {
   AnimationEvent* event = &anim_state.current_event;
-
-  /*
-  static uint32_t lastDebug = 0;
-  if (millis() - lastDebug > 5000) {  // Every 5 seconds - reduce debug frequency
-    Serial.print("Rainbow: step=");
-    Serial.print(anim_state.step_counter);
-    Serial.print("/1280 (");
-    Serial.print((anim_state.step_counter * 100) / 1280);
-    Serial.println("%)");
-    lastDebug = millis();
-  }*/
   
   long firstPixelHue = anim_state.step_counter * 256;
   
@@ -1254,15 +1309,10 @@ void processRainbowFrame() {
   if (anim_state.step_counter >= 1280) {
     anim_state.frame_counter++;
     anim_state.step_counter = 0;
-    Serial.print("🌈 RAINBOW CYCLE COMPLETED! Frame #");
-    Serial.print(anim_state.frame_counter);
-    Serial.println(" - Starting new cycle");
     
     if (event->repeat_count >= 0 && anim_state.frame_counter >= event->repeat_count) {
       anim_state.animation_active = false;
-      // Reset brightness after rainbow completes (like sync version)
-      strip.setBrightness(daytimeBrightness);
-      Serial.println("Rainbow animation finished, brightness reset");
+      // Don't reset brightness - let it stay at current ramped value
     }
   }
 }
@@ -1295,6 +1345,7 @@ void processFlashSingleFrame() {
 
 // Async Blink All Implementation
 void processBlinkAllFrame() {
+
   AnimationEvent* event = &anim_state.current_event;
   
   if (anim_state.step_counter == 0) {
@@ -1327,25 +1378,8 @@ void accumulateEnergyUsage()
 
     // Read voltage and current from INA219.
     shuntVoltage = currentSensor_ina219.getShuntVoltage_mV();
-//    snprintf(sensorData,sizeof(sensorData),"Shunt Voltage Success: %d %f",currentSensor_ina219.success(),shuntVoltage);
-//    Serial.print(sensorData);
-//    Serial.println();
-
-    busVoltage = currentSensor_ina219.getBusVoltage_V();
-//    snprintf(sensorData,sizeof(sensorData),"Bus Voltage Success: %d %f",currentSensor_ina219.success(),busVoltage);
-//    Serial.print(sensorData);
-//    Serial.println();
-
     current_mA = currentSensor_ina219.getCurrent_mA();
-//    snprintf(sensorData,sizeof(sensorData),"current_mA Success: %d %f",currentSensor_ina219.success(),current_mA);
-//    Serial.print(sensorData);
-//    Serial.println();
-
-
     power_mW_hardware = currentSensor_ina219.getPower_mW();
-//    snprintf(sensorData,sizeof(sensorData),"power_mW Success: %d %f",currentSensor_ina219.success(),power_mW);
-//    Serial.print(sensorData);
-//    Serial.println();
 
     // Compute load voltage, power, and milliamp-hours.
     loadVoltage = busVoltage + (shuntVoltage / 1000.0);
@@ -1357,9 +1391,29 @@ void accumulateEnergyUsage()
     const float dutyCyclesInOneHour = 3600000.0 / energyCalcsDutyCycle;
     total_mAH = total_mA / dutyCyclesInOneHour;
 
-    max_current_ma = (current_mA > max_current_ma ? current_mA : max_current_ma);
+    max_current_mA = (current_mA > max_current_mA ? current_mA : max_current_mA);
     min_load_voltage = (loadVoltage < min_load_voltage ? loadVoltage : min_load_voltage);
     max_load_voltage = (loadVoltage > max_load_voltage ? loadVoltage : max_load_voltage);
     max_power_mW_hardware = (power_mW > max_power_mW_hardware ? power_mW : max_power_mW_hardware);
+
+    if (millis() > calcNextAverageAt)
+    {
+      if (accumulation_samples > 0)
+      {
+        avg_current_mA = current_accumulator / (float)accumulation_samples;
+        current_accumulator = 0;
+        avg_power_mW = power_accumulator / (float)accumulation_samples;
+        power_accumulator = 0;
+        accumulation_samples = 0;
+      }
+
+      calcNextAverageAt += averageCalcInterval;
+    }
+    else
+    {
+      current_accumulator += current_mA;
+      power_accumulator += power_mW;
+      accumulation_samples++;
+    }
   }
 }
