@@ -463,11 +463,23 @@ void loop()
     if (newStatus != LC_NO_STATUS_UPDATE && newStatus != lastLemonStatus)
     {
       lastLemonStatus = newStatus;
+      // Stop current animation so the new status animation can start
+      if (useAsyncAnimations) {
+        stopCurrentAnimation();
+      }
     }
   }
 
   if (lastLemonStatus == LC_STARTUP && millis() > initialRainbowPeriod)
-    lastLemonStatus = LC_NONE;
+  {
+    if (lastLemonStatus != LC_NONE) {
+      lastLemonStatus = LC_NONE;
+      // Stop current animation so LC_NONE animation can start
+      if (useAsyncAnimations) {
+        stopCurrentAnimation();
+      }
+    }
+  }
 
   int ledWait=100;
 
