@@ -26,6 +26,7 @@ float temperature = 0, humidity = 0;
 char sensorData[256];
 const uint32_t tempHumidityDutyCycle    = 500;
 const uint32_t sendSensorDataDutyCycle = 1000; 
+const  uint32_t energyCalcsDutyCycle = 100;
 
 uint32_t nextTimeToSendSensorData = 1000;
 const uint32_t initialRainbowPeriod = 7000;   // was 7
@@ -1306,7 +1307,6 @@ void processBlinkAllFrame() {
 
 void accumulateEnergyUsage()
 {
-  const  uint32_t energyCalcsDutyCycle = 1000;
   static uint32_t nextEnergyCalcDue = 0;
 
   if (millis() >= nextEnergyCalcDue)
